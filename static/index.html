@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agentic Pay — Delegated Purchasing Agent</title>
+<style>
+  body { font-family: system-ui, -apple-system, sans-serif; margin: 0; background: #f6f7f9; color: #1a1a2e; }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 24px 16px 64px; }
+  h1 { font-size: 28px; margin: 8px 0 4px; }
+  .sub { color: #555; margin: 0 0 20px; }
+  .banner { display: none; padding: 12px 16px; border-radius: 8px; font-weight: 600; margin-bottom: 16px; }
+  .banner.sim { display: block; background: #fff3cd; border: 1px solid #e0a800; color: #664d03; }
+  .banner.real { display: block; background: #d1e7dd; border: 1px solid #0f5132; color: #0f5132; }
+  .card { background: #fff; border: 1px solid #ddd; border-radius: 10px; padding: 18px; margin-bottom: 16px; }
+  label { display: block; font-weight: 600; margin: 10px 0 4px; }
+  input, select { width: 100%; padding: 9px; border: 1px solid #bbb; border-radius: 6px; font-size: 15px; box-sizing: border-box; }
+  .row { display: flex; gap: 10px; } .row > div { flex: 1; }
+  button { background: #0070e0; color: #fff; border: 0; border-radius: 6px; padding: 11px 18px; font-size: 15px; cursor: pointer; }
+  button:hover { background: #005bb5; }
+  button.secondary { background: #e9ecef; color: #222; }
+  button.danger { background: #c92a2a; }
+  button:disabled { opacity: .5; cursor: default; }
+  table { width: 100%; border-collapse: collapse; margin: 10px 0; }
+  th, td { text-align: left; padding: 7px 6px; border-bottom: 1px solid #eee; font-size: 14px; }
+  td.num, th.num { text-align: right; }
+  .total { font-size: 18px; font-weight: 700; }
+  .ok { color: #0f5132; font-weight: 700; }
+  .over { color: #c92a2a; font-weight: 700; }
+  .approval { border: 2px solid #c92a2a; background: #fff5f5; }
+  .hidden { display: none; }
+  .explain { background: #eef4ff; border-radius: 8px; padding: 12px; font-size: 14px; }
+  .receipt { background: #f1f8f3; border: 1px solid #0f5132; }
+  .small { font-size: 13px; color: #555; }
+  .scenario { display: flex; gap: 8px; margin-top: 12px; }
+  .error { color: #c92a2a; font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🤖 Agentic Pay</h1>
+  <p class="sub">Give the agent a goal and a budget. It shops, compares, and pays with PayPal —
+     and <b>stops to ask you</b> if the best plan goes over budget.</p>
+
+  <div id="modeBanner" class="banner"></div>
+
+  <div class="card">
+    <label for="goal">Goal</label>
+    <input id="goal" value="Team snacks for the office">
+    <div class="row">
+      <div>
+        <label for="budget">Budget</label>
+        <input id="budget" type="number" min="1" step="1" value="100">
+      </div>
+      <div>
+        <label for="currency">Currency</label>
+        <select id="currency">
+          <option value="USD" selected>USD ($)</option>
+          <option value="KRW">KRW (₩) — converted at demo rate</option>
+        </select>
+      </div>
+    </div>
+    <p class="small" id="rateNote"></p>
+    <button id="planBtn">Ask the agent to shop</button>
+    <div class="scenario">
+      <button class="secondary" id="demoWithin">Demo: within budget ($100)</button>
+      <button class="secondary" id="demoOver">Demo: over budget ($50) → approval stop</button>
+    </div>
+    <p class="error" id="formError"></p>
+  </div>
+
+  <div class="card hidden" id="planCard">
+    <h3 style="margin-top:0">Agent's plan</h3>
+    <div class="explain" id="explanation"></div>
+    <table>
+      <thead><tr><th>Item</th><th>Category</th><th class="num">Rating</th><th class="num">Price</th></tr></thead>
+      <tbody id="itemsBody"></tbody>
+    </table>
+    <p class="total">Total: <span id="totalOut"></span> &nbsp;·&nbsp; Budget: <span id="budgetOut"></span>
+       &nbsp; <span id="budgetState"></span></p>
+  </div>
+
+  <div class="card approval hidden" id="approvalCard">
+    <h3 style="margin-top:0">⛔ Payment stopped — human approval needed</h3>
+    <p id="approvalText"></p>
+    <p class="small">No PayPal order has been created. The agent will not pay unless you approve.</p>
+    <button class="danger" id="approveBtn">I approve — pay anyway</button>
+    <button class="secondary" id="cancelBtn">Cancel purchase</button>
+  </div>
+
+  <div class="card hidden" id="payCard">
+    <button id="payBtn">Pay with PayPal</button>
+    <span class="small" id="payHint"></span>
+    <div id="payerStep" class="hidden" style="margin-top:12px">
+      <p>Order created in PayPal Sandbox. Approve it as the buyer, then capture:</p>
+      <a id="approveLink" href="#" target="_blank" rel="noopener"><button type="button">Approve in PayPal Sandbox</button></a>
+      <button id="captureBtn" class="secondary">I've approved — capture payment</button>
+    </div>
+    <p class="error" id="payError"></p>
+  </div>
+
+  <div class="card receipt hidden" id="receiptCard">
+    <h3 style="margin-top:0">🧾 Receipt</h3>
+    <div id="receiptBody"></div>
+  </div>
+</div>
+
+<script>
+const DEMO_KRW_PER_USD = 1470; // demo conversion rate, labeled as such
+let currentPlan = null;
+
+const $ = id => document.getElementById(id);
+
+async function loadMode() {
+  const h = await (await fetch('/api/health')).json();
+  const b = $('modeBanner');
+  if (h.payment_mode === 'SIMULATED') {
+    b.className = 'banner sim';
+    b.textContent = '⚠️ SIMULATED (no PayPal credentials) — payments are simulated locally. Set PAYPAL_CLIENT_ID / PAYPAL_CLIENT_SECRET to use the real PayPal Sandbox.';
+  } else {
+    b.className = 'banner real';
+    b.textContent = '✅ Connected to PayPal Sandbox (api-m.sandbox.paypal.com).';
+  }
+}
+
+function budgetUsd() {
+  const v = parseFloat($('budget').value);
+  if ($('currency').value === 'KRW') return Math.round((v / DEMO_KRW_PER_USD) * 100) / 100;
+  return v;
+}
+function updateRateNote() {
+  $('rateNote').textContent = $('currency').value === 'KRW'
+    ? `Demo rate: ₩${DEMO_KRW_PER_USD.toLocaleString()} = $1 → budget ≈ $${budgetUsd().toFixed(2)}`
+    : '';
+}
+$('currency').addEventListener('change', updateRateNote);
+$('budget').addEventListener('input', updateRateNote);
+
+async function makePlan() {
+  $('formError').textContent = '';
+  const res = await fetch('/api/plan', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({goal: $('goal').value, budget_usd: budgetUsd()})
+  });
+  if (!res.ok) { $('formError').textContent = 'Could not build a plan.'; return; }
+  currentPlan = await res.json();
+  renderPlan();
+}
+
+function renderPlan() {
+  const p = currentPlan;
+  $('planCard').classList.remove('hidden');
+  $('explanation').textContent = '🧠 ' + p.explanation;
+  $('itemsBody').innerHTML = p.items.map(i =>
+    `<tr><td>${i.name}</td><td>${i.category}</td><td class="num">${i.rating}★</td><td class="num">$${i.price_usd.toFixed(2)}</td></tr>`).join('');
+  $('totalOut').textContent = '$' + p.total_usd.toFixed(2);
+  $('budgetOut').textContent = '$' + p.budget_usd.toFixed(2);
+  const st = $('budgetState');
+  if (p.within_budget) {
+    st.className = 'ok'; st.textContent = '✓ within budget';
+    $('approvalCard').classList.add('hidden');
+    $('payCard').classList.remove('hidden');
+    $('payBtn').disabled = false;
+    $('payHint').textContent = p.payment_mode === 'SIMULATED' ? ' (simulated payment)' : ' (PayPal Sandbox)';
+  } else {
+    st.className = 'over'; st.textContent = `✗ over budget by $${p.over_by_usd.toFixed(2)}`;
+    $('payCard').classList.add('hidden');
+    $('approvalCard').classList.remove('hidden');
+    $('approvalText').textContent =
+      `The agent's best bundle costs $${p.total_usd.toFixed(2)}, which is $${p.over_by_usd.toFixed(2)} over your $${p.budget_usd.toFixed(2)} budget.`;
+  }
+  $('receiptCard').classList.add('hidden');
+  $('payerStep').classList.add('hidden');
+  $('payError').textContent = '';
+}
+
+async function pay(humanApproved) {
+  $('payError').textContent = '';
+  const res = await fetch('/api/pay', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({plan_id: currentPlan.plan_id, human_approved: humanApproved})
+  });
+  const data = await res.json();
+  if (!res.ok) { $('payError').textContent = data.detail || 'Payment failed.'; return; }
+  currentPlan = data;
+  if (data.receipt) { showReceipt(data); return; }
+  // Real PayPal mode: order created, buyer approval step comes next.
+  $('approvalCard').classList.add('hidden');
+  $('payCard').classList.remove('hidden');
+  $('payBtn').disabled = true;
+  $('payerStep').classList.remove('hidden');
+  $('approveLink').href = data.payment.approve_url;
+}
+
+async function capture() {
+  const res = await fetch('/api/capture', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({plan_id: currentPlan.plan_id})
+  });
+  const data = await res.json();
+  if (!res.ok) { $('payError').textContent = data.detail || 'Capture failed.'; return; }
+  currentPlan = data;
+  showReceipt(data);
+}
+
+function showReceipt(p) {
+  const r = p.receipt;
+  $('approvalCard').classList.add('hidden');
+  $('payCard').classList.add('hidden');
+  $('receiptCard').classList.remove('hidden');
+  $('receiptBody').innerHTML =
+    (p.payment_mode === 'SIMULATED' ? '<p><b>SIMULATED (no PayPal credentials)</b> — this receipt is from the local simulation.</p>' : '') +
+    `<table>
+       <tr><td>Order ID</td><td>${r.order_id}</td></tr>
+       <tr><td>Capture ID</td><td>${r.capture_id}</td></tr>
+       <tr><td>Status</td><td>${r.status}</td></tr>
+       <tr><td>Amount</td><td>${r.currency} ${Number(r.amount_usd).toFixed(2)}</td></tr>
+       ${r.payer_email ? `<tr><td>Payer</td><td>${r.payer_email}</td></tr>` : ''}
+     </table>
+     <p>Goal: ${p.goal} — ${p.items.length} items purchased by the agent within the delegated rules.</p>`;
+}
+
+$('planBtn').addEventListener('click', makePlan);
+$('payBtn').addEventListener('click', () => pay(false));
+$('approveBtn').addEventListener('click', () => pay(true));
+$('cancelBtn').addEventListener('click', () => {
+  $('approvalCard').classList.add('hidden');
+  $('payError').textContent = '';
+  alert('Purchase cancelled. No payment was made.');
+});
+$('captureBtn').addEventListener('click', capture);
+$('demoWithin').addEventListener('click', () => {
+  $('currency').value = 'USD'; $('budget').value = 100; updateRateNote(); makePlan();
+});
+$('demoOver').addEventListener('click', () => {
+  $('currency').value = 'USD'; $('budget').value = 50; updateRateNote(); makePlan();
+});
+
+updateRateNote();
+loadMode();
+</script>
+</body>
+</html>
