@@ -110,3 +110,13 @@ guard with explicit human approval, not storefront UX.
 ## License
 
 MIT — see `LICENSE`.
+
+## Verified Sandbox run (2026-11-11)
+
+End-to-end run against the real PayPal Sandbox (no simulated mode):
+goal "team snacks", budget $100 -> plan total $95.93 -> order
+`2P79157997934611P` approved by the sandbox buyer -> capture
+`9DX20792JS936453D` COMPLETED, $95.93. With a $50 budget the same plan
+stops at `AWAITING_HUMAN_APPROVAL` and `/api/pay` returns 403 until a
+human approves. Set `RETURN_URL` to control where PayPal returns the
+buyer after approval (defaults to this repository page).

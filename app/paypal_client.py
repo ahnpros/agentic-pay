@@ -82,6 +82,13 @@ def create_order(items: list, total_usd: float) -> dict:
         "application_context": {
             "brand_name": "Agentic Pay",
             "user_action": "PAY_NOW",
+            "shipping_preference": "NO_SHIPPING",
+            "return_url": os.environ.get(
+                "RETURN_URL", "https://github.com/ahnpros/agentic-pay"
+            ),
+            "cancel_url": os.environ.get(
+                "RETURN_URL", "https://github.com/ahnpros/agentic-pay"
+            ),
         },
     }
     with http_client(timeout=20.0) as client:
